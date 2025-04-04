@@ -44,6 +44,8 @@ def detect_rings(frame):
     
     # Track detected rings for each color
     detected_rings = []
+    ring_sizes = []  # To store sizes of detected rings for tracking stability
+    ring_positions = []  # To store positions of detected rings for tracking stability
     
     # Process both red and blue rings
     for color, mask, bbox_color in [("red", red_mask, (0, 0, 255)), 
@@ -79,17 +81,16 @@ def detect_rings(frame):
             # For front view: circularity closer to 1
             # For side view: more elongated with lower circularity
             # Accept a wider range to catch different viewing angles
-            if 0.2 < circularity < 1.5:
+            if 0.4 < circularity < 1.5:
                 cv2.rectangle(result, (x, y), (x + w, y + h), bbox_color, 2)
-                cv2.putText(result, f"{color} ring", (x, y-5), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, bbox_color, 2)
+                #cv2.putText(result, f"{color} ring", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, bbox_color, 2)
                 detected_rings.append((color, (x, y, w, h)))
     
     return result, detected_rings
 
 def main():
     # Open video capture
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(3)
     
     if not cap.isOpened():
         print("Error opening video stream")
@@ -99,29 +100,26 @@ def main():
     
     # Parameters for tracking stability
     prev_rings = []
-    stability_counter = 0
     
     while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
-        # Process frame
+        try:    
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                print("Failed to read frame from video stream")
+                continue
+        except Exception as e:
+            # Handle the case where frame reading fails
+            print(f"Error reading frame: {e}")
+
         result, current_rings = detect_rings(frame)
         
         # Basic tracking to stabilize boxes (prevent flickering)
         if len(current_rings) > 0:
-            # Update the tracking
             prev_rings = current_rings
-            stability_counter = 5  # Keep showing for 5 frames even if detection is lost
-        elif stability_counter > 0:
-            # No rings detected but we'll show the previous ones for stability
-            stability_counter -= 1
             for color, (x, y, w, h) in prev_rings:
                 bbox_color = (0, 0, 255) if color == "red" else (255, 0, 0)
                 cv2.rectangle(result, (x, y), (x + w, y + h), bbox_color, 2)
-                cv2.putText(result, f"{color} ring (tracked)", (x, y-5), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, bbox_color, 2)
+                cv2.putText(result, f"{color} ring ({y},{x}) A={w*h}", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, bbox_color, 2)
         
         # Show result
         cv2.imshow("Ring Detection", result)
