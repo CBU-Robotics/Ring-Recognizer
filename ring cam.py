@@ -83,14 +83,14 @@ def detect_rings(frame):
             # Accept a wider range to catch different viewing angles
             if 0.4 < circularity < 1.5:
                 cv2.rectangle(result, (x, y), (x + w, y + h), bbox_color, 2)
-                #cv2.putText(result, f"{color} ring", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, bbox_color, 2)
+                cv2.putText(result, f"{color} ring", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, bbox_color, 2)
                 detected_rings.append((color, (x, y, w, h)))
     
     return result, detected_rings
 
 def main():
     # Open video capture
-    cap = cv2.VideoCapture(3)
+    cap = cv2.VideoCapture(0)
     
     if not cap.isOpened():
         print("Error opening video stream")
