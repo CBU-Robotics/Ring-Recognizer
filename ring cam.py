@@ -1,5 +1,12 @@
 import cv2
 import numpy as np
+import math
+
+
+CAMERA_ANGLE = 45.0
+CAMERA_HEIGHT_INCH = 10.5  # Height of the camera from the ground in inches
+CAMERA_ROBOT_Y_DELTA = 0.0  # This can be used to adjust the Y position of the camera relative to the robot, if needed
+
 
 def detect_rings(frame):
     """
@@ -20,7 +27,7 @@ def detect_rings(frame):
     upper_red2 = np.array([180, 255, 255]) 
     
     # Blue range
-    lower_blue = np.array([90, 80, 50])
+    lower_blue = np.array([92, 80, 50])
     upper_blue = np.array([130, 255, 255])
     
     # Create masks for red and blue
@@ -88,9 +95,36 @@ def detect_rings(frame):
     
     return result, detected_rings
 
+
+def determine_absolute_position(x, y, w, h, frame_width, frame_height):
+    """
+    Determine the absolute position of the ring based on its bounding box.
+    This function can be used to calculate the center or any other position.
+    """
+
+    frame_height_in = CAMERA_HEIGHT_INCH*math.tan(math.radians(CAMERA_ANGLE)) # Height of the frame in inches based on camera angle and height
+    frame_width_in = (frame_height_in/frame_height)*frame_width # Width of the frame in inches based on height
+
+    pixel_to_inch_ratio = frame_width_in / frame_width # Calculate the ratio of inches to pixels
+
+    print(f"Frame dimensions in inches: {frame_width_in:.2f} x {frame_height_in:.2f}")
+
+    # Calculate the center of the bounding box
+    center_x = x + w // 2
+    center_y = y + h // 2
+
+    center_x_in = ((center_x+(frame_width/2)-frame_width) / frame_width) * frame_width_in # Convert pixel x coordinate to inches
+    center_y_in = ((-center_y+frame_height) / frame_height) * frame_height_in + CAMERA_ROBOT_Y_DELTA # Convert pixel y coordinate to inches
+
+    center_x_in = round(center_x_in, 2)  # Round to 2 decimal places for readability
+    center_y_in = round(center_y_in, 2)  # Round to 2 decimal places for readability
+    
+    return (center_x_in, center_y_in)
+
+
 def main():
     # Open video capture
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(3)
     
     if not cap.isOpened():
         print("Error opening video stream")
@@ -111,6 +145,7 @@ def main():
             # Handle the case where frame reading fails
             print(f"Error reading frame: {e}")
 
+        frame_height, frame_width = frame.shape[:2]
         result, current_rings = detect_rings(frame)
         
         # Basic tracking to stabilize boxes (prevent flickering)
@@ -119,7 +154,7 @@ def main():
             for color, (x, y, w, h) in prev_rings:
                 bbox_color = (0, 0, 255) if color == "red" else (255, 0, 0)
                 cv2.rectangle(result, (x, y), (x + w, y + h), bbox_color, 2)
-                cv2.putText(result, f"{color} ring ({y},{x}) A={w*h}", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, bbox_color, 2)
+                cv2.putText(result, f"{color} {determine_absolute_position(x,y,w,h,frame_width,frame_height)}", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, bbox_color, 2)
         
         # Show result
         cv2.imshow("Ring Detection", result)
