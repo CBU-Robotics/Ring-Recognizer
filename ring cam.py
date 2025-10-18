@@ -124,7 +124,7 @@ def determine_absolute_position(x, y, w, h, frame_width, frame_height):
 
 def main():
     # Open video capture
-    cap = cv2.VideoCapture(3)
+    cap = cv2.VideoCapture()
     
     if not cap.isOpened():
         print("Error opening video stream")
