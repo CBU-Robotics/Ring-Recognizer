@@ -19,19 +19,30 @@ def detect_blocks(frame):
     # Make a copy of the frame
     result = frame.copy()
     
+    # Convert to grayscale for face detection
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # Simple face detection to create exclusion zones
+    # Load face cascade (built into OpenCV)
+    try:
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+    except:
+        faces = []  # If face detection fails, continue without it
+    
     # Convert to HSV color space
     hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     
-    # Define color ranges with broader thresholds for red and blue blocks
-    # Red has two ranges in HSV
-    lower_red1 = np.array([0, 50, 50])     # Lower red range (broader for plastic)
-    upper_red1 = np.array([10, 255, 255])  
-    lower_red2 = np.array([170, 50, 50])   # Upper red range (broader for plastic)
+    # Define color ranges specifically for plastic blocks (tighter to avoid clothing/faces)
+    # Red has two ranges in HSV - made more restrictive
+    lower_red1 = np.array([0, 80, 80])     # Lower red range (higher saturation/value)
+    upper_red1 = np.array([8, 255, 255])  
+    lower_red2 = np.array([172, 80, 80])   # Upper red range (higher saturation/value)
     upper_red2 = np.array([180, 255, 255]) 
     
-    # Blue range (adjusted for plastic blocks)
-    lower_blue = np.array([100, 50, 50])
-    upper_blue = np.array([130, 255, 255])
+    # Blue range (more restrictive for plastic blocks)
+    lower_blue = np.array([105, 80, 80])   # Higher saturation and value to avoid clothing
+    upper_blue = np.array([125, 255, 255])
     
     # Create masks for red and blue
     red_mask1 = cv2.inRange(hsv_frame, lower_red1, upper_red1)
@@ -66,7 +77,7 @@ def detect_blocks(frame):
         # Process each contour
         for contour in contours:
             area = cv2.contourArea(contour)
-            if area < 3000:  # Filter small noise (adjusted for blocks)
+            if area < 1000:  # Filter small noise
                 continue
                 
             # Calculate shape metrics
@@ -77,12 +88,25 @@ def detect_blocks(frame):
             # Get bounding box
             x, y, w, h = cv2.boundingRect(contour)
             
+            # Check if this contour overlaps with any detected face
+            overlaps_face = False
+            for (fx, fy, fw, fh) in faces:
+                # Check if contour bounding box overlaps with face bounding box
+                if (x < fx + fw and x + w > fx and y < fy + fh and y + h > fy):
+                    overlaps_face = True
+                    break
+            
+            if overlaps_face:
+                continue  # Skip anything that overlaps with a detected face
+            
             # Calculate aspect ratio to filter out non-block shapes
             aspect_ratio = float(w) / h if h > 0 else 0
             
-            # Skip if aspect ratio is too extreme (blocks should be roughly square-ish)
-            # Allow wider range to catch blocks from different angles
-            if aspect_ratio < 0.5 or aspect_ratio > 2.0:
+            # Skip faces and very large objects (likely humans)
+            # Blocks should be much smaller than faces
+            if (area > 15000 or  # Too large (likely face/body)
+                aspect_ratio < 0.6 or aspect_ratio > 1.8 or  # Blocks should be roughly square
+                w > 200 or h > 200):  # Size limit in pixels
                 continue
             
             # Use polygon approximation to count vertices
@@ -91,15 +115,32 @@ def detect_blocks(frame):
             approx_polygon = cv2.approxPolyDP(contour, epsilon, True)
             vertex_count = len(approx_polygon)
             
-            # For 18-sided blocks, accept shapes with approximately 12-24 vertices
-            # (accounting for camera angle, distance, and approximation variations)
-            if 12 <= vertex_count <= 24:
-                # Additional area filter for blocks (40g, ~3.25" diameter)
-                # Area should be reasonable for a block at typical distances
-                if area > 3000 and area < 50000:
-                    cv2.rectangle(result, (x, y), (x + w, y + h), bbox_color, 2)
-                    cv2.putText(result, f"{color} block (v:{vertex_count})", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, bbox_color, 2)
-                    detected_blocks.append((color, (x, y, w, h)))
+            # Calculate additional geometric properties to filter out faces/non-blocks
+            # 1. Solidity: ratio of contour area to convex hull area
+            hull = cv2.convexHull(contour)
+            hull_area = cv2.contourArea(hull)
+            solidity = area / hull_area if hull_area > 0 else 0
+            
+            # 2. Extent: ratio of contour area to bounding rectangle area
+            extent = area / (w * h) if (w * h) > 0 else 0
+            
+            # 3. Compactness: circularity measure
+            compactness = (perimeter * perimeter) / area if area > 0 else 0
+            
+            # Filter criteria for blocks (reject faces and irregular shapes):
+            # - Blocks should be fairly solid (high solidity)
+            # - Blocks should fill most of their bounding box (reasonable extent)
+            # - Blocks should have reasonable compactness
+            # - Area should be appropriate for blocks at camera distance
+            if (solidity > 0.85 and  # High solidity - blocks are solid shapes
+                extent > 0.6 and extent < 0.95 and  # Good extent - fills bounding box well
+                compactness < 20 and  # Reasonable compactness
+                area > 1000 and area < 15000 and  # Appropriate size range for blocks
+                12 <= vertex_count <= 24):  # Polygon vertex count for 18-sided blocks
+                
+                cv2.rectangle(result, (x, y), (x + w, y + h), bbox_color, 2)
+                cv2.putText(result, f"{color} block (v:{vertex_count})", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, bbox_color, 2)
+                detected_blocks.append((color, (x, y, w, h)))
     
     return result, detected_blocks
 
