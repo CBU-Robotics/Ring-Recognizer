@@ -2,16 +2,19 @@ import cv2
 import numpy as np
 import math
 
+# Block Detection System
+# Detects 18-sided hollow plastic polygonal blocks (red/blue)
+# Block specifications: 40g weight, 3.25" between flat faces, 3.85" between corners
 
 CAMERA_ANGLE = 45.0
 CAMERA_HEIGHT_INCH = 10.5  # Height of the camera from the ground in inches
 CAMERA_ROBOT_Y_DELTA = 0.0  # This can be used to adjust the Y position of the camera relative to the robot, if needed
 
 
-def detect_rings(frame):
+def detect_blocks(frame):
     """
-    Modified function to detect rings without human detection filtering
-    Tracks both circular and elliptical shapes
+    Modified function to detect 18-sided polygonal blocks (red/blue)
+    Tracks polygonal shapes using vertex counting and approximation
     """
     # Make a copy of the frame
     result = frame.copy()
@@ -19,15 +22,15 @@ def detect_rings(frame):
     # Convert to HSV color space
     hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     
-    # Define color ranges with broader thresholds for red
+    # Define color ranges with broader thresholds for red and blue blocks
     # Red has two ranges in HSV
-    lower_red1 = np.array([0, 70, 50])     # Lower red range
+    lower_red1 = np.array([0, 50, 50])     # Lower red range (broader for plastic)
     upper_red1 = np.array([10, 255, 255])  
-    lower_red2 = np.array([160, 70, 50])   # Upper red range
+    lower_red2 = np.array([170, 50, 50])   # Upper red range (broader for plastic)
     upper_red2 = np.array([180, 255, 255]) 
     
-    # Blue range
-    lower_blue = np.array([92, 80, 50])
+    # Blue range (adjusted for plastic blocks)
+    lower_blue = np.array([100, 50, 50])
     upper_blue = np.array([130, 255, 255])
     
     # Create masks for red and blue
@@ -36,8 +39,8 @@ def detect_rings(frame):
     red_mask = cv2.bitwise_or(red_mask1, red_mask2)
     blue_mask = cv2.inRange(hsv_frame, lower_blue, upper_blue)
     
-    # Apply morphological operations to clean up masks
-    kernel = np.ones((5, 5), np.uint8)
+    # Apply morphological operations to clean up masks (adjusted for blocks)
+    kernel = np.ones((3, 3), np.uint8)  # Smaller kernel for better polygon preservation
     red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
     red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel)
     blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel)
@@ -49,12 +52,12 @@ def detect_rings(frame):
     debug_view[:, :, 2] = red_mask   # Red channel
     cv2.imshow("Color Masks", debug_view)
     
-    # Track detected rings for each color
-    detected_rings = []
-    ring_sizes = []  # To store sizes of detected rings for tracking stability
-    ring_positions = []  # To store positions of detected rings for tracking stability
+    # Track detected blocks for each color
+    detected_blocks = []
+    block_sizes = []  # To store sizes of detected blocks for tracking stability
+    block_positions = []  # To store positions of detected blocks for tracking stability
     
-    # Process both red and blue rings
+    # Process both red and blue blocks
     for color, mask, bbox_color in [("red", red_mask, (0, 0, 255)), 
                                    ("blue", blue_mask, (255, 0, 0))]:
         # Find all contours in the mask
@@ -63,7 +66,7 @@ def detect_rings(frame):
         # Process each contour
         for contour in contours:
             area = cv2.contourArea(contour)
-            if area < 5000:  # Filter small noise
+            if area < 3000:  # Filter small noise (adjusted for blocks)
                 continue
                 
             # Calculate shape metrics
@@ -74,26 +77,31 @@ def detect_rings(frame):
             # Get bounding box
             x, y, w, h = cv2.boundingRect(contour)
             
-            # Calculate aspect ratio to filter out non-ring shapes
+            # Calculate aspect ratio to filter out non-block shapes
             aspect_ratio = float(w) / h if h > 0 else 0
             
-            # Skip if aspect ratio is too extreme (probably not a ring)
-            # Allow wider range to catch rings from different angles
-            if aspect_ratio < 0.4 or aspect_ratio > 1.4:
+            # Skip if aspect ratio is too extreme (blocks should be roughly square-ish)
+            # Allow wider range to catch blocks from different angles
+            if aspect_ratio < 0.5 or aspect_ratio > 2.0:
                 continue
-                
-            # Calculate circularity (for front view) or elongation (for side view)
-            circularity = 4 * np.pi * area / (perimeter * perimeter)
             
-            # For front view: circularity closer to 1
-            # For side view: more elongated with lower circularity
-            # Accept a wider range to catch different viewing angles
-            if 0.4 < circularity < 1.5:
-                cv2.rectangle(result, (x, y), (x + w, y + h), bbox_color, 2)
-                cv2.putText(result, f"{color} ring", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, bbox_color, 2)
-                detected_rings.append((color, (x, y, w, h)))
+            # Use polygon approximation to count vertices
+            # Approximate the contour to a polygon
+            epsilon = 0.02 * perimeter  # Approximation accuracy parameter
+            approx_polygon = cv2.approxPolyDP(contour, epsilon, True)
+            vertex_count = len(approx_polygon)
+            
+            # For 18-sided blocks, accept shapes with approximately 12-24 vertices
+            # (accounting for camera angle, distance, and approximation variations)
+            if 12 <= vertex_count <= 24:
+                # Additional area filter for blocks (40g, ~3.25" diameter)
+                # Area should be reasonable for a block at typical distances
+                if area > 3000 and area < 50000:
+                    cv2.rectangle(result, (x, y), (x + w, y + h), bbox_color, 2)
+                    cv2.putText(result, f"{color} block (v:{vertex_count})", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, bbox_color, 2)
+                    detected_blocks.append((color, (x, y, w, h)))
     
-    return result, detected_rings
+    return result, detected_blocks
 
 
 def determine_absolute_position(x, y, w, h, frame_width, frame_height):
@@ -124,7 +132,7 @@ def determine_absolute_position(x, y, w, h, frame_width, frame_height):
 
 def main():
     # Open video capture
-    cap = cv2.VideoCapture()
+    cap = cv2.VideoCapture(0)
     
     if not cap.isOpened():
         print("Error opening video stream")
@@ -133,7 +141,7 @@ def main():
     print("Press 'q' to exit")
     
     # Parameters for tracking stability
-    prev_rings = []
+    prev_blocks = []
     
     while True:
         try:    
@@ -146,18 +154,18 @@ def main():
             print(f"Error reading frame: {e}")
 
         frame_height, frame_width = frame.shape[:2]
-        result, current_rings = detect_rings(frame)
+        result, current_blocks = detect_blocks(frame)
         
         # Basic tracking to stabilize boxes (prevent flickering)
-        if len(current_rings) > 0:
-            prev_rings = current_rings
-            for color, (x, y, w, h) in prev_rings:
+        if len(current_blocks) > 0:
+            prev_blocks = current_blocks
+            for color, (x, y, w, h) in prev_blocks:
                 bbox_color = (0, 0, 255) if color == "red" else (255, 0, 0)
                 cv2.rectangle(result, (x, y), (x + w, y + h), bbox_color, 2)
-                cv2.putText(result, f"{color} {determine_absolute_position(x,y,w,h,frame_width,frame_height)}", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, bbox_color, 2)
+                cv2.putText(result, f"{color} block {determine_absolute_position(x,y,w,h,frame_width,frame_height)}", (x, y-25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, bbox_color, 2)
         
         # Show result
-        cv2.imshow("Ring Detection", result)
+        cv2.imshow("Block Detection", result)
         
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
