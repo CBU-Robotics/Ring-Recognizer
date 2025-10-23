@@ -2,37 +2,36 @@ import cv2
 import numpy as np
 import math
 
-# Simple Shape Detection System
-# Detects red and blue colored shapes
 
 CAMERA_ANGLE = 45.0
 CAMERA_HEIGHT_INCH = 10.5  # Height of the camera from the ground in inches
 CAMERA_ROBOT_Y_DELTA = 0.0  # This can be used to adjust the Y position of the camera relative to the robot, if needed
 
 
-def detect_blocks(frame):
+def detect_rings(frame):
     """
-    Simplified function to detect red and blue shapes
+    Modified function to detect rings without human detection filtering
+    Tracks both circular and elliptical shapes with improved consistency
     """
     # Make a copy of the frame
     result = frame.copy()
     
-    # Apply Gaussian blur to reduce noise
+    # Apply Gaussian blur to reduce noise and improve consistency
     blurred = cv2.GaussianBlur(frame, (5, 5), 0)
     
     # Convert to HSV color space
     hsv_frame = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
     
-    # Define color ranges for red and blue shapes
+    # Define color ranges with broader thresholds for red
     # Red has two ranges in HSV
-    lower_red1 = np.array([0, 50, 50])     # Lower red range
-    upper_red1 = np.array([10, 255, 255])  
-    lower_red2 = np.array([170, 50, 50])   # Upper red range
+    lower_red1 = np.array([0, 60, 40])     # Lower red range (slightly more permissive)
+    upper_red1 = np.array([12, 255, 255])  
+    lower_red2 = np.array([158, 60, 40])   # Upper red range (slightly more permissive)
     upper_red2 = np.array([180, 255, 255]) 
     
-    # Blue range
-    lower_blue = np.array([100, 50, 50])
-    upper_blue = np.array([130, 255, 255])
+    # Blue range (slightly more permissive)
+    lower_blue = np.array([90, 70, 40])
+    upper_blue = np.array([132, 255, 255])
     
     # Create masks for red and blue
     red_mask1 = cv2.inRange(hsv_frame, lower_red1, upper_red1)
@@ -40,12 +39,17 @@ def detect_blocks(frame):
     red_mask = cv2.bitwise_or(red_mask1, red_mask2)
     blue_mask = cv2.inRange(hsv_frame, lower_blue, upper_blue)
     
-    # Apply morphological operations to clean up masks
-    kernel = np.ones((5, 5), np.uint8)
-    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
-    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel)
-    blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel)
-    blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel)
+    # Apply morphological operations with different kernel sizes for better consistency
+    kernel_small = np.ones((3, 3), np.uint8)
+    kernel_large = np.ones((7, 7), np.uint8)
+    
+    # First pass: remove small noise
+    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel_small)
+    blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel_small)
+    
+    # Second pass: fill gaps
+    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel_large)
+    blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel_large)
     
     # Show debug masks
     debug_view = np.zeros_like(frame)
@@ -53,36 +57,56 @@ def detect_blocks(frame):
     debug_view[:, :, 2] = red_mask   # Red channel
     cv2.imshow("Color Masks", debug_view)
     
-    # Track detected shapes for each color
-    detected_shapes = []
+    # Track detected rings for each color
+    detected_rings = []
     
-    # Process both red and blue shapes
+    # Process both red and blue rings
     for color, mask, bbox_color in [("red", red_mask, (0, 0, 255)), 
                                    ("blue", blue_mask, (255, 0, 0))]:
         # Find all contours in the mask
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Sort contours by area (largest first)
+        # Sort contours by area (largest first) for consistent processing
         contours = sorted(contours, key=cv2.contourArea, reverse=True)
         
         # Process each contour
         for contour in contours:
             area = cv2.contourArea(contour)
-            if area < 1000:  # Filter small noise
+            if area < 3000:  # Reduced minimum area for better detection
+                continue
+                
+            # Calculate shape metrics
+            perimeter = cv2.arcLength(contour, True)
+            if perimeter <= 0:
                 continue
                 
             # Get bounding box
             x, y, w, h = cv2.boundingRect(contour)
             
-            # Basic size filter - reject very small or very large shapes
-            if w < 20 or h < 20 or w > 500 or h > 500:
+            # Calculate aspect ratio to filter out non-ring shapes
+            aspect_ratio = float(w) / h if h > 0 else 0
+            
+            # More lenient aspect ratio for rings at various angles
+            if aspect_ratio < 0.3 or aspect_ratio > 2.0:
                 continue
                 
-            cv2.rectangle(result, (x, y), (x + w, y + h), bbox_color, 2)
-            cv2.putText(result, f"{color} shape", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, bbox_color, 2)
-            detected_shapes.append((color, (x, y, w, h)))
+            # Calculate circularity and compactness
+            circularity = 4 * np.pi * area / (perimeter * perimeter)
+            
+            # More flexible circularity check - rings can appear quite different from various angles
+            if 0.2 < circularity < 1.8:
+                # Additional check: ensure the contour has reasonable solidity
+                hull = cv2.convexHull(contour)
+                hull_area = cv2.contourArea(hull)
+                solidity = float(area) / hull_area if hull_area > 0 else 0
+                
+                # Rings should have reasonable solidity (not too fragmented)
+                if solidity > 0.6:
+                    cv2.rectangle(result, (x, y), (x + w, y + h), bbox_color, 2)
+                    cv2.putText(result, f"{color} ring", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, bbox_color, 2)
+                    detected_rings.append((color, (x, y, w, h)))
     
-    return result, detected_shapes
+    return result, detected_rings
 
 
 def determine_absolute_position(x, y, w, h, frame_width, frame_height):
@@ -122,7 +146,9 @@ def main():
     print("Press 'q' to exit")
     
     # Parameters for tracking stability
-    prev_shapes = []
+    prev_rings = []
+    ring_history = []  # Track ring positions over time for stability
+    frame_count = 0
     
     while True:
         try:    
@@ -136,21 +162,38 @@ def main():
             continue
 
         frame_height, frame_width = frame.shape[:2]
-        result, current_shapes = detect_blocks(frame)
+        result, current_rings = detect_rings(frame)
         
-        # Basic tracking to stabilize boxes (prevent flickering)
-        if len(current_shapes) > 0:
-            prev_shapes = current_shapes
+        # Improved tracking for stability
+        frame_count += 1
         
-        # Draw detected shapes
-        for color, (x, y, w, h) in prev_shapes:
+        # Store ring history for smoothing
+        ring_history.append(current_rings)
+        if len(ring_history) > 5:  # Keep last 5 frames
+            ring_history.pop(0)
+        
+        # Use current rings if detected, otherwise use previous stable detection
+        stable_rings = current_rings if len(current_rings) > 0 else prev_rings
+        
+        # Only update prev_rings if we have a confident detection
+        if len(current_rings) > 0:
+            # Check if detection is consistent with recent history
+            if len(ring_history) >= 3:
+                recent_detections = sum(len(rings) for rings in ring_history[-3:])
+                if recent_detections >= 3:  # At least 1 ring detected per frame in last 3 frames
+                    prev_rings = current_rings
+            else:
+                prev_rings = current_rings
+        
+        # Draw stable rings
+        for color, (x, y, w, h) in stable_rings:
             bbox_color = (0, 0, 255) if color == "red" else (255, 0, 0)
             cv2.rectangle(result, (x, y), (x + w, y + h), bbox_color, 2)
             position = determine_absolute_position(x, y, w, h, frame_width, frame_height)
             cv2.putText(result, f"{color} {position}", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, bbox_color, 2)
         
         # Show result
-        cv2.imshow("Shape Detection", result)
+        cv2.imshow("Ring Detection", result)
         
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
@@ -160,4 +203,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
