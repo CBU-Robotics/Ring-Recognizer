@@ -1,11 +1,7 @@
 import cv2
 import numpy as np
-import math
 
-
-CAMERA_ANGLE = 45.0
-CAMERA_HEIGHT_INCH = 10.5  # Height of the camera from the ground in inches
-CAMERA_ROBOT_Y_DELTA = 0.0  # This can be used to adjust the Y position of the camera relative to the robot, if needed
+from common_utils import determine_absolute_position, create_color_masks, CAMERA_ANGLE, CAMERA_HEIGHT_INCH, CAMERA_ROBOT_Y_DELTA
 
 
 def detect_rings(frame):
@@ -22,22 +18,8 @@ def detect_rings(frame):
     # Convert to HSV color space
     hsv_frame = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
     
-    # Define color ranges with broader thresholds for red
-    # Red has two ranges in HSV
-    lower_red1 = np.array([0, 60, 40])     # Lower red range (slightly more permissive)
-    upper_red1 = np.array([12, 255, 255])  
-    lower_red2 = np.array([158, 60, 40])   # Upper red range (slightly more permissive)
-    upper_red2 = np.array([180, 255, 255]) 
-    
-    # Blue range (slightly more permissive)
-    lower_blue = np.array([90, 70, 40])
-    upper_blue = np.array([132, 255, 255])
-    
-    # Create masks for red and blue
-    red_mask1 = cv2.inRange(hsv_frame, lower_red1, upper_red1)
-    red_mask2 = cv2.inRange(hsv_frame, lower_red2, upper_red2)
-    red_mask = cv2.bitwise_or(red_mask1, red_mask2)
-    blue_mask = cv2.inRange(hsv_frame, lower_blue, upper_blue)
+    # Create masks for red and blue using common utilities
+    red_mask, blue_mask = create_color_masks(hsv_frame)
     
     # Apply morphological operations with different kernel sizes for better consistency
     kernel_small = np.ones((3, 3), np.uint8)
@@ -107,32 +89,6 @@ def detect_rings(frame):
                     detected_rings.append((color, (x, y, w, h)))
     
     return result, detected_rings
-
-
-def determine_absolute_position(x, y, w, h, frame_width, frame_height):
-    """
-    Determine the absolute position of the ring based on its bounding box.
-    This function can be used to calculate the center or any other position.
-    """
-
-    frame_height_in = CAMERA_HEIGHT_INCH*math.tan(math.radians(CAMERA_ANGLE)) # Height of the frame in inches based on camera angle and height
-    frame_width_in = (frame_height_in/frame_height)*frame_width # Width of the frame in inches based on height
-
-    pixel_to_inch_ratio = frame_width_in / frame_width # Calculate the ratio of inches to pixels
-
-    print(f"Frame dimensions in inches: {frame_width_in:.2f} x {frame_height_in:.2f}")
-
-    # Calculate the center of the bounding box
-    center_x = x + w // 2
-    center_y = y + h // 2
-
-    center_x_in = ((center_x+(frame_width/2)-frame_width) / frame_width) * frame_width_in # Convert pixel x coordinate to inches
-    center_y_in = ((-center_y+frame_height) / frame_height) * frame_height_in + CAMERA_ROBOT_Y_DELTA # Convert pixel y coordinate to inches
-
-    center_x_in = round(center_x_in, 2)  # Round to 2 decimal places for readability
-    center_y_in = round(center_y_in, 2)  # Round to 2 decimal places for readability
-    
-    return (center_x_in, center_y_in)
 
 
 def main():
