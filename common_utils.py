@@ -66,8 +66,6 @@ def determine_absolute_position(x, y, w, h, frame_width, frame_height):
     frame_height_in = CAMERA_HEIGHT_INCH * math.tan(math.radians(CAMERA_ANGLE))  # Height of the frame in inches based on camera angle and height
     frame_width_in = (frame_height_in / frame_height) * frame_width  # Width of the frame in inches based on height
 
-    pixel_to_inch_ratio = frame_width_in / frame_width  # Calculate the ratio of inches to pixels
-
     print(f"Frame dimensions in inches: {frame_width_in:.2f} x {frame_height_in:.2f}")
 
     # Calculate the center of the bounding box
@@ -129,18 +127,4 @@ def create_color_masks(hsv_frame):
     return red_mask, blue_mask
 
 
-def apply_morphological_operations(mask, kernel_size=(5, 5)):
-    """
-    Apply morphological operations to clean up a binary mask.
-    
-    Args:
-        mask: Binary mask to process
-        kernel_size: Tuple of (width, height) for morphological kernel
-    
-    Returns:
-        Processed mask
-    """
-    kernel = np.ones(kernel_size, np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-    return mask
+

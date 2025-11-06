@@ -4,7 +4,7 @@ import numpy as np
 # Simple Shape Detection System
 # Detects red and blue colored shapes
 
-from common_utils import determine_absolute_position, CAMERA_ANGLE, CAMERA_HEIGHT_INCH, CAMERA_ROBOT_Y_DELTA
+from common_utils import determine_absolute_position, create_color_masks, CAMERA_ANGLE, CAMERA_HEIGHT_INCH, CAMERA_ROBOT_Y_DELTA
 
 
 def detect_blocks(frame):
@@ -20,22 +20,8 @@ def detect_blocks(frame):
     # Convert to HSV color space
     hsv_frame = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
     
-    # Define color ranges for red and blue shapes
-    # Red has two ranges in HSV
-    lower_red1 = np.array([0, 50, 50])     # Lower red range
-    upper_red1 = np.array([10, 255, 255])  
-    lower_red2 = np.array([170, 50, 50])   # Upper red range
-    upper_red2 = np.array([180, 255, 255]) 
-    
-    # Blue range
-    lower_blue = np.array([100, 50, 50])
-    upper_blue = np.array([130, 255, 255])
-    
-    # Create masks for red and blue
-    red_mask1 = cv2.inRange(hsv_frame, lower_red1, upper_red1)
-    red_mask2 = cv2.inRange(hsv_frame, lower_red2, upper_red2)
-    red_mask = cv2.bitwise_or(red_mask1, red_mask2)
-    blue_mask = cv2.inRange(hsv_frame, lower_blue, upper_blue)
+    # Create masks for red and blue using common utilities
+    red_mask, blue_mask = create_color_masks(hsv_frame)
     
     # Apply morphological operations to clean up masks
     kernel = np.ones((5, 5), np.uint8)
