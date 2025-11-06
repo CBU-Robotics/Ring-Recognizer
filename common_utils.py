@@ -72,7 +72,7 @@ def determine_absolute_position(x, y, w, h, frame_width, frame_height):
     center_x = x + w // 2
     center_y = y + h // 2
 
-    center_x_in = ((center_x + (frame_width / 2) - frame_width) / frame_width) * frame_width_in  # Convert pixel x coordinate to inches
+    center_x_in = ((center_x - frame_width / 2) / frame_width) * frame_width_in  # Convert pixel x coordinate to inches
     center_y_in = ((-center_y + frame_height) / frame_height) * frame_height_in + CAMERA_ROBOT_Y_DELTA  # Convert pixel y coordinate to inches
 
     center_x_in = round(center_x_in, 2)  # Round to 2 decimal places for readability
@@ -125,6 +125,4 @@ def create_color_masks(hsv_frame):
     blue_mask = cv2.inRange(hsv_frame, lower_blue, upper_blue)
     
     return red_mask, blue_mask
-
-
 
