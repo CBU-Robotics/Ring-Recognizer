@@ -15,16 +15,11 @@ from typing import List, Tuple, Dict, Any
 import cv2
 import numpy as np
 
+from common_utils import find_contours_compat
+
 # -------------------------
 # Compatibility helpers
 # -------------------------
-def find_contours_compat(img, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_SIMPLE):
-    res = cv2.findContours(img, mode, method)
-    if len(res) == 2:
-        contours, hierarchy = res
-    else:
-        _, contours, hierarchy = res
-    return contours, hierarchy
 
 def approximate_contour(cnt: np.ndarray, epsilon_factor: float = 0.02) -> np.ndarray:
     peri = cv2.arcLength(cnt, True)

@@ -23,6 +23,8 @@ from typing import List, Tuple
 import cv2
 import numpy as np
 
+from common_utils import find_contours_compat
+
 # Attempt to import shape_detector functions if present in repository
 try:
     # assumes shape_detector.py (snake_case) exists in same folder or installed
@@ -34,18 +36,6 @@ except Exception:
 # -------------------------
 # Helpers
 # -------------------------
-def find_contours_compat(mask):
-    """
-    Wrap cv2.findContours to be compatible across OpenCV versions.
-    Returns (contours, hierarchy)
-    """
-    res = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    # OpenCV sometimes returns (contours, hierarchy) or (image, contours, hierarchy)
-    if len(res) == 2:
-        contours, hierarchy = res
-    else:
-        _, contours, hierarchy = res
-    return contours, hierarchy
 
 def is_headless() -> bool:
     # On Linux DISPLAY is required for cv2.imshow; on Windows/mac it generally exists.
