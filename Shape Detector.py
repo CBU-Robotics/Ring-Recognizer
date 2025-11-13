@@ -15,7 +15,7 @@ from typing import List, Tuple, Dict, Any
 import cv2
 import numpy as np
 
-from common_utils import find_contours_compat
+from common_utils import find_contours_compat, create_color_masks
 
 # -------------------------
 # Compatibility helpers
@@ -218,13 +218,103 @@ def detect_circles_hough(image: np.ndarray,
             print("No Hough circles detected")
     return output, detections
 
+# -------------------------
+# Ball detection with circular bounding
+# -------------------------
+def detect_balls_circular(image: np.ndarray,
+                         min_area: int = 500,
+                         min_radius: int = 8,
+                         max_radius: int = 150,
+                         min_circularity: float = 0.3,
+                         debug: bool = False) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+    """
+    Detect red and blue balls using circular bounding boxes and color masks
+    """
+    output = image.copy()
+    
+    # Apply Gaussian blur to reduce noise
+    blurred = cv2.GaussianBlur(image, (5, 5), 0)
+    
+    # Convert to HSV color space
+    hsv_frame = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+    
+    # Create masks for red and blue using common utilities
+    red_mask, blue_mask = create_color_masks(hsv_frame)
+    
+    # Apply morphological operations to clean up masks
+    kernel = np.ones((5, 5), np.uint8)
+    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
+    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel)
+    blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel)
+    blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel)
+    
+    detected_balls = []
+    
+    # Process both red and blue balls
+    for color, mask, bbox_color in [("red", red_mask, (0, 0, 255)), 
+                                   ("blue", blue_mask, (255, 0, 0))]:
+        # Find all contours in the mask
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Sort contours by area (largest first)
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+        
+        # Process each contour to find ball-like shapes
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < min_area:
+                continue
+            
+            # Use circular bounding instead of rectangular
+            (center_x, center_y), radius = cv2.minEnclosingCircle(contour)
+            center_x, center_y = int(center_x), int(center_y)
+            radius = int(radius)
+            
+            # Size filter for balls - reasonable ball sizes
+            if radius < min_radius or radius > max_radius:
+                continue
+            
+            # Calculate circularity to filter for ball-like shapes
+            perimeter = cv2.arcLength(contour, True)
+            if perimeter > 0:
+                circularity = 4 * np.pi * area / (perimeter * perimeter)
+                # Balls should have high circularity (close to 1.0)
+                if circularity < min_circularity:
+                    if debug:
+                        print(f"Reject {color} ball: low circularity {circularity:.3f} < {min_circularity}")
+                    continue
+            
+            # Draw circle bounding
+            cv2.circle(output, (center_x, center_y), radius, bbox_color, 2)
+            cv2.putText(output, f"{color} ball", (center_x - radius, center_y - radius - 10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, bbox_color, 2)
+            
+            # Store detection data
+            detected_balls.append({
+                "color": color,
+                "center": (center_x, center_y),
+                "radius": radius,
+                "area": area,
+                "circularity": circularity,
+                "contour": contour
+            })
+            
+            if debug:
+                print(f"Detected {color} ball: center=({center_x},{center_y}), radius={radius}, "
+                      f"area={area:.1f}, circularity={circularity:.3f}")
+    
+    return output, detected_balls
+
 # If run as script, keep the CLI (shortened)
 def _parse_args():
     parser = argparse.ArgumentParser(description="Shape detector utility (improved)")
     parser.add_argument("--image", help="Path to input image")
-    parser.add_argument("--mode", choices=["contours", "hough", "regular"], default="regular")
+    parser.add_argument("--mode", choices=["contours", "hough", "regular", "balls"], default="balls")
     parser.add_argument("--n", type=int, default=18, help="Number of sides for regular polygon search")
     parser.add_argument("--min-area", type=int, default=500)
+    parser.add_argument("--min-radius", type=int, default=8, help="Minimum ball radius")
+    parser.add_argument("--max-radius", type=int, default=150, help="Maximum ball radius") 
+    parser.add_argument("--min-circularity", type=float, default=0.3, help="Minimum circularity for balls")
     parser.add_argument("--eps", type=float, default=0.02)
     parser.add_argument("--side-cv", type=float, default=0.15)
     parser.add_argument("--radius-cv", type=float, default=0.12)
@@ -242,7 +332,14 @@ def main():
     if image is None:
         raise FileNotFoundError(f"Unable to read image {args.image}")
 
-    if args.mode == "regular":
+    if args.mode == "balls":
+        annotated, detections = detect_balls_circular(image, min_area=args.min_area,
+                                                     min_radius=args.min_radius, max_radius=args.max_radius,
+                                                     min_circularity=args.min_circularity, debug=args.debug)
+        print(f"Found {len(detections)} balls:")
+        for detection in detections:
+            print(f"  {detection['color']} ball at {detection['center']} with radius {detection['radius']}")
+    elif args.mode == "regular":
         annotated, detections = detect_regular_polygons(image, n=args.n, min_area=args.min_area,
                                                         eps_factor=args.eps, max_side_cv=args.side_cv,
                                                         max_radius_cv=args.radius_cv, vertex_slack=args.vertex_slack,
