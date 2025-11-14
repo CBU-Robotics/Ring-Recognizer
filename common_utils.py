@@ -87,6 +87,12 @@ def determine_absolute_position(x, y, w, h, frame_width, frame_height):
 def get_color_ranges():
     """
     Get standard HSV color ranges for red and blue detection.
+    Adjusted to exclude problematic background colors:
+    - Orange table (H~15, S~65, V~88)
+    - Light orange/beige (H~31, S~30, V~97)  
+    - Dark orange/brown (H~11, S~31, V~49)
+    - Light blue/gray (H~229, S~12, V~91)
+    - Dark reddish-brown (H~353, S~37, V~37)
     
     Returns:
         Dictionary containing color range definitions with keys:
@@ -95,9 +101,11 @@ def get_color_ranges():
         - 'blue': Tuple of (lower_bound, upper_bound) for blue range
     """
     return {
-        'red1': (np.array([0, 60, 40]), np.array([12, 255, 255])),
-        'red2': (np.array([158, 60, 40]), np.array([180, 255, 255])),
-        'blue': (np.array([90, 70, 40]), np.array([132, 255, 255]))
+        # Red detection - more selective to avoid dark/muddy colors
+        'red1': (np.array([0, 85, 60]), np.array([6, 255, 255])),      # Pure reds, higher sat/val thresholds
+        'red2': (np.array([165, 85, 60]), np.array([180, 255, 255])),  # Deep reds, higher sat/val thresholds
+        # Blue detection - avoid grayish blues
+        'blue': (np.array([100, 85, 70]), np.array([130, 255, 255]))   # Pure blues only
     }
 
 

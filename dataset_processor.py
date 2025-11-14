@@ -23,7 +23,7 @@ from typing import List, Tuple
 import cv2
 import numpy as np
 
-from common_utils import find_contours_compat
+from common_utils import find_contours_compat, create_color_masks
 
 # Attempt to import shape_detector functions if present in repository
 try:
@@ -124,59 +124,48 @@ def detect_shapes_simple(image: np.ndarray,
 # -------------------------
 # Improved detection function to handle background elements
 # -------------------------
-def detect_objects_improved(image: np.ndarray,
-                           min_area_px: int = None,
-                           hsv_ranges: dict = None,
-                           center_bias: float = 0.3) -> Tuple[np.ndarray, List[Tuple[str, Tuple[int,int,int,int], float]]]:
+def detect_objects_improved(image: np.ndarray):
     """
-    Improved object detection that filters out edge/background elements
+    Improved object detection with enhanced filtering (matching block cam.py)
+    Uses the same detection logic as the live camera system for consistency.
     """
-    if hsv_ranges is None:
-        hsv_ranges = {
-            "red1": (np.array([0, 60, 50]), np.array([10, 255, 255])),
-            "red2": (np.array([170, 60, 50]), np.array([180, 255, 255])),
-            "blue": (np.array([100, 60, 50]), np.array([140, 255, 255])),
-        }
-
     h, w = image.shape[:2]
     center_x, center_y = w // 2, h // 2
     
-    # default min_area relative to image size if not specified
-    if min_area_px is None:
-        min_area_px = max(2000, int((w * h) * 0.001))  # Increased threshold
-
-    # Blur and convert
-    blurred = cv2.GaussianBlur(image, (7, 7), 0)  # More blur to reduce noise
-    hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
-
-    # Masks
-    r1_lo, r1_hi = hsv_ranges["red1"]
-    r2_lo, r2_hi = hsv_ranges["red2"]
-    b_lo, b_hi = hsv_ranges["blue"]
-
-    red_mask1 = cv2.inRange(hsv, r1_lo, r1_hi)
-    red_mask2 = cv2.inRange(hsv, r2_lo, r2_hi)
-    red_mask = cv2.bitwise_or(red_mask1, red_mask2)
-    blue_mask = cv2.inRange(hsv, b_lo, b_hi)
-
-    # Larger morphology kernel to merge object parts and remove small artifacts
+    # Apply more blur to reduce noise (matching block cam)
+    blurred = cv2.GaussianBlur(image, (7, 7), 0)
+    
+    # Convert to HSV color space
+    hsv_frame = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+    
+    # Create masks using common utilities (same as block cam)
+    red_mask, blue_mask = create_color_masks(hsv_frame)
+    
+    # Larger morphological operations (matching block cam)
     k = max(5, int(min(w, h) / 150))
     if k % 2 == 0:
         k += 1
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
     
+    # Apply morphological operations with 2 iterations (matching block cam)
     red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel, iterations=2)
     red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
     blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel, iterations=2)
     blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-
-    result = image.copy()
+    
     detections = []
-
-    for color_name, mask in [("red", red_mask), ("blue", blue_mask)]:
+    processed_image = image.copy()
+    
+    # Minimum area based on frame size (matching block cam)
+    min_area_px = max(2000, int((w * h) * 0.001))
+    center_bias = 0.3
+    
+    # Process both red and blue objects (exactly like block cam)
+    for color, mask in [("red", red_mask), ("blue", blue_mask)]:
+        # Find all contours in the mask
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Filter contours by multiple criteria
+        # Filter contours using improved criteria (same as block cam)
         valid_contours = []
         for contour in contours:
             area = cv2.contourArea(contour)
@@ -186,25 +175,25 @@ def detect_objects_improved(image: np.ndarray,
             # Get contour properties
             x, y, w_rect, h_rect = cv2.boundingRect(contour)
             
-            # Filter out edge objects (too close to image borders)
-            border_margin = min(w, h) * 0.05  # 5% margin from edges
+            # Filter out edge objects (same 5% margin as block cam)
+            border_margin = min(w, h) * 0.05
             if (x < border_margin or y < border_margin or 
                 x + w_rect > w - border_margin or y + h_rect > h - border_margin):
                 continue
             
-            # Filter by aspect ratio (avoid very elongated shapes like edges)
+            # Filter by aspect ratio (same thresholds as block cam)
             aspect_ratio = w_rect / h_rect if h_rect > 0 else 0
-            if aspect_ratio > 3 or aspect_ratio < 0.33:  # Too elongated
+            if aspect_ratio > 3 or aspect_ratio < 0.33:
                 continue
             
-            # Calculate distance from center (prefer center objects)
+            # Calculate distance from center (same as block cam)
             contour_center_x = x + w_rect // 2
             contour_center_y = y + h_rect // 2
             dist_from_center = np.sqrt((contour_center_x - center_x)**2 + (contour_center_y - center_y)**2)
             max_dist = np.sqrt(center_x**2 + center_y**2)
             center_score = 1.0 - (dist_from_center / max_dist)
             
-            # Calculate circularity/compactness
+            # Calculate circularity (same as block cam)
             perimeter = cv2.arcLength(contour, True)
             if perimeter > 0:
                 circularity = 4 * np.pi * area / (perimeter * perimeter)
@@ -213,26 +202,52 @@ def detect_objects_improved(image: np.ndarray,
             
             valid_contours.append((contour, area, center_score, circularity))
         
-        # Sort by a composite score: area + center bias + circularity
+        # Sort by composite score (same as block cam)
         valid_contours.sort(key=lambda x: x[1] * (1 + center_bias * x[2]) * (1 + 0.5 * x[3]), reverse=True)
         
-        # Take only the best contour(s) - usually just the main object
-        for i, (contour, area, center_score, circularity) in enumerate(valid_contours[:2]):  # Max 2 objects per color
-            x, y, w_rect, h_rect = cv2.boundingRect(contour)
+        # Take only the best contour(s) - max 2 objects per color (same as block cam)
+        for i, (contour, area, center_score, circularity) in enumerate(valid_contours[:2]):
+            # Use circular bounding (same as block cam)
+            (center_x_obj, center_y_obj), radius = cv2.minEnclosingCircle(contour)
+            center_x_obj, center_y_obj = int(center_x_obj), int(center_y_obj)
+            radius = int(radius)
             
-            # Use minimum enclosing circle for better bounding
-            (cx, cy), radius = cv2.minEnclosingCircle(contour)
-            cx, cy, radius = int(cx), int(cy), int(radius)
+            # Draw on processed image (same as block cam)
+            bbox_color = (0, 0, 255) if color == "red" else (255, 0, 0)
+            cv2.circle(processed_image, (center_x_obj, center_y_obj), radius, bbox_color, 3)
+            cv2.putText(processed_image, f"{color} object", (center_x_obj - radius, center_y_obj - radius - 10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, bbox_color, 2)
             
-            # Draw detection
-            color_bgr = (0, 0, 255) if color_name == "red" else (255, 0, 0)
-            cv2.circle(result, (cx, cy), radius, color_bgr, 3)
-            cv2.putText(result, f"{color_name} object", (cx - radius, cy - radius - 10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, color_bgr, 2)
+            # Convert circle to bounding box for compatibility
+            x, y = center_x_obj - radius, center_y_obj - radius
+            w_box, h_box = radius * 2, radius * 2
             
-            detections.append((color_name, (x, y, w_rect, h_rect), area))
+            # Store detection in format expected by existing code
+            detections.append((color, (x, y, w_box, h_box), area))
+    
+    return processed_image, detections
 
-    return result, detections
+
+def draw_detections_on_image(image, detections):
+    """
+    Draw detection results on image (matching block cam visualization)
+    """
+    result = image.copy()
+    
+    for detection in detections:
+        color = detection["color"]
+        center_x, center_y = detection["center"]
+        radius = detection["radius"]
+        
+        # Use same colors as block cam
+        bbox_color = (0, 0, 255) if color == "red" else (255, 0, 0)
+        
+        # Draw circle (same as block cam)
+        cv2.circle(result, (center_x, center_y), radius, bbox_color, 3)
+        cv2.putText(result, f"{color} object", (center_x - radius, center_y - radius - 10), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, bbox_color, 2)
+    
+    return result
 
 # -------------------------
 # Dataset processing
