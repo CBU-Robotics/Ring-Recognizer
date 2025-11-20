@@ -175,16 +175,17 @@ def detect_objects_improved(image: np.ndarray):
             # Get contour properties
             x, y, w_rect, h_rect = cv2.boundingRect(contour)
             
-            # Filter out edge objects (same 5% margin as block cam)
-            border_margin = min(w, h) * 0.05
+            # Filter out edge objects (reduced margin for better edge detection)
+            border_margin = min(w, h) * 0.01
             if (x < border_margin or y < border_margin or 
                 x + w_rect > w - border_margin or y + h_rect > h - border_margin):
                 continue
             
-            # Filter by aspect ratio (same thresholds as block cam)
+            # Filter by aspect ratio (relaxed for large objects)
             aspect_ratio = w_rect / h_rect if h_rect > 0 else 0
-            if aspect_ratio > 3 or aspect_ratio < 0.33:
-                continue
+            if area < (w*h)*0.25:  # only enforce for smaller objects
+                if aspect_ratio > 3 or aspect_ratio < 0.33:
+                    continue
             
             # Calculate distance from center (same as block cam)
             contour_center_x = x + w_rect // 2
@@ -311,8 +312,15 @@ def process_dataset(dataset_path: str,
             else:
                 processed, detections = detect_objects_improved(img)
 
-            blue_count = sum(1 for d in detections if d[0] == "blue" or (isinstance(d, dict) and d.get("n") is None and d.get("shape") == "blue"))
-            red_count = sum(1 for d in detections if d[0] == "red" or (isinstance(d, dict) and d.get("shape") == "red"))
+            # Only consider detections that passed all high-confidence logic 
+            # (i.e., survived the improved detector's filtering + ranking)
+            high_conf_detections = [
+                d for d in detections
+                if isinstance(d, tuple) and len(d) >= 3
+            ]
+
+            blue_count = sum(1 for d in high_conf_detections if d[0] == "blue")
+            red_count  = sum(1 for d in high_conf_detections if d[0] == "red")
 
             record = {
                 "filename": img_file.name,
