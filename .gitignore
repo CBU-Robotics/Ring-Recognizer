@@ -2,6 +2,8 @@
 dataset/
 results/
 processed_images/
+aug_dataset/
+processed_images/
 
 # Python cache
 __pycache__/
