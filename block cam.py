@@ -13,9 +13,10 @@ CONF_MIN = 0.05   # Threshold to delete a stale track
 MATCH_DIST = 80   # Max pixel distance to match new detection to a track
 
 
-def detect_balls(frame):
+def detect_balls(frame, mode=None):
     """
     Detect red and blue objects using improved filtering (adapted from dataset processor)
+    mode: None (default, detect both), 'red' (only red), 'blue' (only blue)
     """
     # Make a copy of the frame
     result = frame.copy()
@@ -31,17 +32,19 @@ def detect_balls(frame):
     
     # Create masks for red and blue using common utilities
     red_mask, blue_mask = create_color_masks(hsv_frame)
-    
-    # Larger morphological operations to clean up masks (matching dataset processor)
-    k = max(5, int(min(w, h) / 150))
+    # Erode masks to help separate touching objects
+    erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    red_mask = cv2.erode(red_mask, erode_kernel, iterations=1)
+    blue_mask = cv2.erode(blue_mask, erode_kernel, iterations=1)
+    # Morphological operations for cleanup
+    k = max(3, int(min(w, h) / 300))
     if k % 2 == 0:
         k += 1
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-    
-    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel, iterations=2)
-    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-    blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel, iterations=2)
-    blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+    blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+    blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
     
     # Show debug masks
     debug_view = np.zeros_like(frame)
@@ -57,32 +60,46 @@ def detect_balls(frame):
     center_bias = 0.3
     
     # Process both red and blue objects
-    for color, mask, bbox_color in [("red", red_mask, (0, 0, 255)), 
-                                   ("blue", blue_mask, (255, 0, 0))]:
+    for color, mask, bbox_color in [("red", red_mask, (0, 0, 255)), ("blue", blue_mask, (255, 0, 0))]:
+        if mode == 'red' and color != 'red':
+            continue
+        if mode == 'blue' and color != 'blue':
+            continue
+        
         # Find all contours in the mask
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         # Filter contours using improved criteria
         valid_contours = []
+        debug_missed = []
         for contour in contours:
             area = cv2.contourArea(contour)
-            if area < min_area_px:
-                continue
-                
-            # Get contour properties
             x, y, w_rect, h_rect = cv2.boundingRect(contour)
-            
-            # Filter out edge objects (reduced margin for better edge detection)
-            border_margin = min(w, h) * 0.01  # reduced from 5% to 1%
-            if (x < border_margin or y < border_margin or 
-                x + w_rect > w - border_margin or y + h_rect > h - border_margin):
-                continue
-            
-            # Filter by aspect ratio (relaxed for large objects)
             aspect_ratio = w_rect / h_rect if h_rect > 0 else 0
-            if area < (w*h)*0.25:  # only enforce for smaller objects
-                if aspect_ratio > 3 or aspect_ratio < 0.33:  # Too elongated
-                    continue
+            perimeter = cv2.arcLength(contour, True)
+            circularity = 4 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0
+            border_margin = min(w, h) * 0.01
+            # Debug: log why contour is skipped
+            reason = None
+            if area < min_area_px:
+                reason = f"area {area:.1f} < min_area_px {min_area_px}"
+            elif (x < border_margin or y < border_margin or x + w_rect > w - border_margin or y + h_rect > h - border_margin):
+                reason = f"edge: x={x}, y={y}, w={w_rect}, h={h_rect}, border_margin={border_margin:.1f}"
+            elif area < (w*h)*0.25 and (aspect_ratio > 3 or aspect_ratio < 0.33):
+                reason = f"aspect_ratio {aspect_ratio:.2f} out of range for area {area:.1f}"
+            if reason:
+                debug_missed.append({
+                    "color": color,
+                    "area": area,
+                    "aspect_ratio": aspect_ratio,
+                    "circularity": circularity,
+                    "x": x,
+                    "y": y,
+                    "w": w_rect,
+                    "h": h_rect,
+                    "reason": reason
+                })
+                continue
             
             # Calculate distance from center (prefer center objects)
             contour_center_x = x + w_rect // 2
@@ -103,22 +120,22 @@ def detect_balls(frame):
         # Sort by composite score: area + center bias + circularity
         valid_contours.sort(key=lambda x: x[1] * (1 + center_bias * x[2]) * (1 + 0.5 * x[3]), reverse=True)
         
-        # Take only the best contour(s) - usually just the main object
-        for i, (contour, area, center_score, circularity) in enumerate(valid_contours):  # Max 2 objects per color
-            # Use circular bounding instead of rectangular
+        # Draw a circle for each valid contour (multiple objects per color)
+        for contour, area, center_score, circularity in valid_contours:
             (center_x_obj, center_y_obj), radius = cv2.minEnclosingCircle(contour)
             center_x_obj, center_y_obj = int(center_x_obj), int(center_y_obj)
-            radius = int(radius)
-            
-            # Draw circle bounding
+            radius = int(radius * 0.85)  # Shrink bounding circle
             cv2.circle(result, (center_x_obj, center_y_obj), radius, bbox_color, 3)
             cv2.putText(result, f"{color} object", (center_x_obj - radius, center_y_obj - radius - 10), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, bbox_color, 2)
-            
-            # For compatibility with position calculation, convert circle to bounding box
             x, y = center_x_obj - radius, center_y_obj - radius
             w_box, h_box = radius * 2, radius * 2
             detected_balls.append((color, (center_x_obj, center_y_obj), radius, (x, y, w_box, h_box)))
+        
+        if debug_missed:
+            print(f"[DEBUG] Missed {len(debug_missed)} {color} contours:")
+            for d in debug_missed:
+                print(f"  Reason: {d['reason']} | area={d['area']:.1f}, aspect={d['aspect_ratio']:.2f}, circ={d['circularity']:.2f}, x={d['x']}, y={d['y']}, w={d['w']}, h={d['h']}")
     
     return result, detected_balls
 
@@ -192,7 +209,7 @@ def update_tracks(detections, tracked_balls, next_id):
 
 def main():
     # Open video capture
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(0)
     
     if not cap.isOpened():
         print("Error opening video stream")
@@ -204,6 +221,7 @@ def main():
     tracked_balls = {}
     next_id = 0
     
+    detection_mode = 'red'  # Set to 'red' for red-only detection
     while True:
         try:    
             ret, frame = cap.read()
@@ -216,7 +234,7 @@ def main():
             continue
 
         frame_height, frame_width = frame.shape[:2]
-        result, current_balls = detect_balls(frame)
+        result, current_balls = detect_balls(frame, mode=detection_mode)
         
         # Update tracking with confidence-based decay
         tracked_balls, next_id = update_tracks(current_balls, tracked_balls, next_id)
