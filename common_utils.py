@@ -78,6 +78,9 @@ def determine_absolute_position(x, y, w, h, frame_width, frame_height):
     center_x_in = round(center_x_in, 2)  # Round to 2 decimal places for readability
     center_y_in = round(center_y_in, 2)  # Round to 2 decimal places for readability
     
+    # Removed: Debug print that was flooding console
+    # print(f"Frame dimensions in inches: {frame_width_in:.2f} x {frame_height_in:.2f}")
+    
     return (center_x_in, center_y_in)
 
 

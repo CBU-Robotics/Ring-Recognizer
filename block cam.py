@@ -32,10 +32,12 @@ def detect_balls(frame, mode=None):
     
     # Create masks for red and blue using common utilities
     red_mask, blue_mask = create_color_masks(hsv_frame)
-    # Erode masks to help separate touching objects
-    erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    red_mask = cv2.erode(red_mask, erode_kernel, iterations=1)
-    blue_mask = cv2.erode(blue_mask, erode_kernel, iterations=1)
+    
+    # IMPROVED: More aggressive erosion to separate touching objects
+    erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    red_mask = cv2.erode(red_mask, erode_kernel, iterations=2)
+    blue_mask = cv2.erode(blue_mask, erode_kernel, iterations=2)
+    
     # Morphological operations for cleanup
     k = max(3, int(min(w, h) / 300))
     if k % 2 == 0:
@@ -216,12 +218,16 @@ def main():
         return
     
     print("Press 'q' to exit")
+    print("Press 'r' to toggle red detection")
+    print("Press 'b' to toggle blue detection")
     
     # Tracking memory: {id: {"color":..., "center":..., "radius":..., "bbox":..., "confidence":...}}
     tracked_balls = {}
     next_id = 0
     
-    detection_mode = 'red'  # Set to 'red' for red-only detection
+    # FIXED: Detection modes are now configurable
+    detect_red = True
+    detect_blue = True
     while True:
         try:    
             ret, frame = cap.read()
@@ -234,7 +240,18 @@ def main():
             continue
 
         frame_height, frame_width = frame.shape[:2]
-        result, current_balls = detect_balls(frame, mode=detection_mode)
+        
+        # Determine detection mode based on flags
+        if detect_red and detect_blue:
+            mode = None  # Detect both
+        elif detect_red:
+            mode = 'red'
+        elif detect_blue:
+            mode = 'blue'
+        else:
+            mode = None  # Default to both if neither selected
+        
+        result, current_balls = detect_balls(frame, mode=mode)
         
         # Update tracking with confidence-based decay
         tracked_balls, next_id = update_tracks(current_balls, tracked_balls, next_id)
@@ -275,8 +292,15 @@ def main():
         # Show result
         cv2.imshow("Object Detection", result)
         
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
             break
+        elif key == ord('r'):
+            detect_red = not detect_red
+            print(f"Red detection: {'ON' if detect_red else 'OFF'}")
+        elif key == ord('b'):
+            detect_blue = not detect_blue
+            print(f"Blue detection: {'ON' if detect_blue else 'OFF'}")
     
     cap.release()
     cv2.destroyAllWindows()
