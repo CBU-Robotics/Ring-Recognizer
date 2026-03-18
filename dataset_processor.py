@@ -19,6 +19,7 @@ import logging
 import sys
 import os
 from typing import List, Tuple
+import json
 
 import cv2
 import numpy as np
@@ -264,7 +265,7 @@ def process_dataset(dataset_path: str,
         Blue objects/
         Red objects/
 
-    Returns: results dict
+    Returns: results dict with detailed statistics
     """
     logger = logging.getLogger("dataset_processor")
     dataset_path = Path(dataset_path)
@@ -273,6 +274,7 @@ def process_dataset(dataset_path: str,
         outp.mkdir(parents=True, exist_ok=True)
 
     results = {"blue_objects": [], "red_objects": []}
+    stats = {"total_processed": 0, "failed": 0, "errors": []}
 
     folders = [("Blue objects", "blue_objects"), ("Red objects", "red_objects")]
 
@@ -292,148 +294,390 @@ def process_dataset(dataset_path: str,
         if sample_size:
             image_files = image_files[:sample_size]
 
+        if not image_files:
+            logger.warning("No images found in %s", folder)
+            continue
+
         logger.info("Processing %d images in %s", len(image_files), folder)
 
-        for img_file in image_files:
-            img = cv2.imread(str(img_file))
-            if img is None:
-                logger.warning("Unable to read image: %s", img_file)
-                continue
+        for idx, img_file in enumerate(image_files, 1):
+            try:
+                img = cv2.imread(str(img_file))
+                if img is None:
+                    logger.warning("Unable to read image: %s", img_file)
+                    stats["failed"] += 1
+                    stats["errors"].append(f"Failed to read: {img_file.name}")
+                    continue
 
-            # Prefer advanced shape_detector if available and requested
-            if use_shape_module and HAVE_SHAPE_MODULE:
-                try:
-                    processed, detections = detect_regular_polygons(img, n=18, debug=False)
-                    # If composite detection desired, call detect_square_plus_regular_ngon instead.
-                except Exception:
-                    # fallback to improved detector if advanced fails
-                    logger.exception("shape_detector failed for %s - falling back to improved detector", img_file)
+                # Log progress
+                if idx % max(1, len(image_files) // 10) == 0:
+                    logger.debug("Progress: %d/%d images processed", idx, len(image_files))
+
+                # Prefer advanced shape_detector if available and requested
+                if use_shape_module and HAVE_SHAPE_MODULE:
+                    try:
+                        processed, detections = detect_regular_polygons(img, n=18, debug=False)
+                        # If composite detection desired, call detect_square_plus_regular_ngon instead.
+                    except Exception as e:
+                        # fallback to improved detector if advanced fails
+                        logger.debug("shape_detector failed for %s: %s - using fallback", img_file.name, str(e))
+                        processed, detections = detect_objects_improved(img)
+                else:
                     processed, detections = detect_objects_improved(img)
-            else:
-                processed, detections = detect_objects_improved(img)
 
-            # Only consider detections that passed all high-confidence logic 
-            # (i.e., survived the improved detector's filtering + ranking)
-            high_conf_detections = [
-                d for d in detections
-                if isinstance(d, tuple) and len(d) >= 3
-            ]
+                # Only consider detections that passed all high-confidence logic 
+                # (i.e., survived the improved detector's filtering + ranking)
+                high_conf_detections = [
+                    d for d in detections
+                    if isinstance(d, tuple) and len(d) >= 3
+                ]
 
-            blue_count = sum(1 for d in high_conf_detections if d[0] == "blue")
-            red_count  = sum(1 for d in high_conf_detections if d[0] == "red")
+                blue_count = sum(1 for d in high_conf_detections if d[0] == "blue")
+                red_count  = sum(1 for d in high_conf_detections if d[0] == "red")
 
-            record = {
-                "filename": img_file.name,
-                "blue_detected": int(blue_count),
-                "red_detected": int(red_count),
-                "total_shapes": int(len(detections))
-            }
-            results[key].append(record)
+                record = {
+                    "filename": img_file.name,
+                    "blue_detected": int(blue_count),
+                    "red_detected": int(red_count),
+                    "total_shapes": int(len(detections)),
+                    "path": str(img_file)
+                }
+                results[key].append(record)
+                stats["total_processed"] += 1
 
-            if show_images and not is_headless():
-                try:
-                    cv2.imshow(f"{folder_name} - {img_file.name}", processed)
-                    # show for minimal time - allow user to press a key to continue
-                    cv2.waitKey(250)
-                except Exception:
-                    logger.exception("cv2.imshow failed (likely headless) - skipping GUI display")
-                    show_images = False
+                if show_images and not is_headless():
+                    try:
+                        cv2.imshow(f"{folder_name} - {img_file.name}", processed)
+                        # show for minimal time - allow user to press a key to continue
+                        key_press = cv2.waitKey(250) & 0xFF
+                        if key_press == ord('q'):
+                            logger.info("User quit during image display")
+                            show_images = False
+                    except Exception as e:
+                        logger.debug("cv2.imshow failed: %s - skipping GUI display", str(e))
+                        show_images = False
 
-            if output_path:
-                out_file = Path(output_path) / f"processed_{key}_{img_file.name}"
-                try:
-                    cv2.imwrite(str(out_file), processed)
-                except Exception:
-                    logger.exception("Failed to write processed image %s", out_file)
+                if output_path:
+                    out_file = Path(output_path) / f"processed_{key}_{img_file.name}"
+                    try:
+                        cv2.imwrite(str(out_file), processed)
+                        logger.debug("Saved: %s", out_file)
+                    except Exception as e:
+                        logger.error("Failed to write processed image %s: %s", out_file, str(e))
+                        stats["errors"].append(f"Failed to write: {out_file.name}")
+
+            except Exception as e:
+                logger.error("Unexpected error processing %s: %s", img_file, str(e))
+                stats["failed"] += 1
+                stats["errors"].append(f"Error: {img_file.name} - {str(e)}")
+                continue
 
         # close any open windows for folder loop
         if show_images and not is_headless():
             cv2.destroyAllWindows()
 
+    # Log processing summary
+    logger.info("Dataset processing complete: %d processed, %d failed", 
+                stats["total_processed"], stats["failed"])
+    if stats["errors"]:
+        logger.warning("Errors encountered: %d", len(stats["errors"]))
+        for error in stats["errors"][:5]:  # Show first 5 errors
+            logger.warning("  - %s", error)
+
     return results
 
 def print_summary(results):
     """
-    Print a human-readable summary of detection results
+    Print a comprehensive human-readable summary of detection results
+    with detailed metrics and problem identification
     """
-    print("\n" + "="*50)
-    print("DETECTION SUMMARY")
-    print("="*50)
+    print("\n" + "="*60)
+    print("DETECTION SUMMARY - COMPREHENSIVE ANALYSIS")
+    print("="*60)
 
     # Blue
     blue_results = results.get("blue_objects", [])
     if blue_results:
-        print(f"\nBLUE OBJECTS FOLDER ({len(blue_results)} images):")
+        print(f"\n📘 BLUE OBJECTS FOLDER ({len(blue_results)} images):")
+        print("-" * 60)
+        
         detected_blue = sum(1 for r in blue_results if r["blue_detected"] > 0)
         missed_blue = len(blue_results) - detected_blue
         false_red = sum(1 for r in blue_results if r["red_detected"] > 0)
         no_detection = sum(1 for r in blue_results if r["total_shapes"] == 0)
+        
+        detection_rate = detected_blue / len(blue_results) * 100
+        false_positive_rate = false_red / len(blue_results) * 100
+        
+        # Color-code the metrics
+        rate_symbol = "🟢" if detection_rate >= 90 else "🟡" if detection_rate >= 70 else "🔴"
+        false_symbol = "🟢" if false_positive_rate < 10 else "🟡" if false_positive_rate < 20 else "🔴"
 
-        print(f"  ✓ Successfully detected blue objects: {detected_blue}/{len(blue_results)} ({detected_blue/len(blue_results)*100:.1f}%)")
-        print(f"  ✗ Missed blue objects: {missed_blue}/{len(blue_results)} ({missed_blue/len(blue_results)*100:.1f}%)")
-        print(f"  ⚠️ False positive (detected as red): {false_red}/{len(blue_results)} ({false_red/len(blue_results)*100:.1f}%)")
-        print(f"  ❌ No detection at all: {no_detection}/{len(blue_results)} ({no_detection/len(blue_results)*100:.1f}%)")
+        print(f"  {rate_symbol} Successfully detected blue: {detected_blue:3d}/{len(blue_results)} ({detection_rate:5.1f}%)")
+        print(f"  ❌ Missed blue detections:     {missed_blue:3d}/{len(blue_results)} ({100-detection_rate:5.1f}%)")
+        print(f"  {false_symbol} False positives (as red):    {false_red:3d}/{len(blue_results)} ({false_positive_rate:5.1f}%)")
+        print(f"  ⚠️  No detection at all:        {no_detection:3d}/{len(blue_results)}")
 
         avg_blue = sum(r["blue_detected"] for r in blue_results) / len(blue_results)
-        print(f"  📊 Average blue detections per image: {avg_blue:.1f}")
+        total_detections = sum(r["total_shapes"] for r in blue_results)
+        print(f"\n  📊 Average detections per image: {avg_blue:.2f}")
+        print(f"  📊 Total objects detected: {total_detections}")
 
+        # Identify problem files
         missed_files = [r["filename"] for r in blue_results if r["blue_detected"] == 0]
+        multi_detected = [r["filename"] for r in blue_results if r["total_shapes"] > 1]
+        
         if missed_files:
-            print(f"  🔍 Examples of missed detections: {', '.join(missed_files[:3])}")
+            print(f"\n  🔍 Missed detections ({len(missed_files)} files):")
+            for fname in missed_files[:5]:
+                print(f"     - {fname}")
+            if len(missed_files) > 5:
+                print(f"     ... and {len(missed_files) - 5} more")
+        
+        if multi_detected:
+            print(f"\n  ⚠️  Multiple detections per image ({len(multi_detected)} files):")
+            for fname in multi_detected[:3]:
+                for r in blue_results:
+                    if r["filename"] == fname:
+                        print(f"     - {fname} ({r['total_shapes']} shapes detected)")
+                        break
+            if len(multi_detected) > 3:
+                print(f"     ... and {len(multi_detected) - 3} more")
 
     # Red
     red_results = results.get("red_objects", [])
     if red_results:
-        print(f"\nRED OBJECTS FOLDER ({len(red_results)} images):")
+        print(f"\n📕 RED OBJECTS FOLDER ({len(red_results)} images):")
+        print("-" * 60)
+        
         detected_red = sum(1 for r in red_results if r["red_detected"] > 0)
         missed_red = len(red_results) - detected_red
         false_blue = sum(1 for r in red_results if r["blue_detected"] > 0)
         no_detection = sum(1 for r in red_results if r["total_shapes"] == 0)
+        
+        detection_rate = detected_red / len(red_results) * 100
+        false_positive_rate = false_blue / len(red_results) * 100
+        
+        # Color-code the metrics
+        rate_symbol = "🟢" if detection_rate >= 90 else "🟡" if detection_rate >= 70 else "🔴"
+        false_symbol = "🟢" if false_positive_rate < 10 else "🟡" if false_positive_rate < 20 else "🔴"
 
-        print(f"  ✓ Successfully detected red objects: {detected_red}/{len(red_results)} ({detected_red/len(red_results)*100:.1f}%)")
-        print(f"  ✗ Missed red objects: {missed_red}/{len(red_results)} ({missed_red/len(red_results)*100:.1f}%)")
-        print(f"  ⚠️ False positive (detected as blue): {false_blue}/{len(red_results)} ({false_blue/len(red_results)*100:.1f}%)")
-        print(f"  ❌ No detection at all: {no_detection}/{len(red_results)} ({no_detection/len(red_results)*100:.1f}%)")
+        print(f"  {rate_symbol} Successfully detected red:  {detected_red:3d}/{len(red_results)} ({detection_rate:5.1f}%)")
+        print(f"  ❌ Missed red detections:      {missed_red:3d}/{len(red_results)} ({100-detection_rate:5.1f}%)")
+        print(f"  {false_symbol} False positives (as blue):   {false_blue:3d}/{len(red_results)} ({false_positive_rate:5.1f}%)")
+        print(f"  ⚠️  No detection at all:        {no_detection:3d}/{len(red_results)}")
 
         avg_red = sum(r["red_detected"] for r in red_results) / len(red_results)
-        print(f"  📊 Average red detections per image: {avg_red:.1f}")
+        total_detections = sum(r["total_shapes"] for r in red_results)
+        print(f"\n  📊 Average detections per image: {avg_red:.2f}")
+        print(f"  📊 Total objects detected: {total_detections}")
 
+        # Identify problem files
         missed_files = [r["filename"] for r in red_results if r["red_detected"] == 0]
+        multi_detected = [r["filename"] for r in red_results if r["total_shapes"] > 1]
+        
         if missed_files:
-            print(f"  🔍 Examples of missed detections: {', '.join(missed_files[:3])}")
+            print(f"\n  🔍 Missed detections ({len(missed_files)} files):")
+            for fname in missed_files[:5]:
+                print(f"     - {fname}")
+            if len(missed_files) > 5:
+                print(f"     ... and {len(missed_files) - 5} more")
+        
+        if multi_detected:
+            print(f"\n  ⚠️  Multiple detections per image ({len(multi_detected)} files):")
+            for fname in multi_detected[:3]:
+                for r in red_results:
+                    if r["filename"] == fname:
+                        print(f"     - {fname} ({r['total_shapes']} shapes detected)")
+                        break
+            if len(multi_detected) > 3:
+                print(f"     ... and {len(multi_detected) - 3} more")
 
-    # Overall
+    # Overall Statistics
+    print(f"\n" + "="*60)
+    print("🎯 OVERALL STATISTICS")
+    print("="*60)
+    
     total_images = len(blue_results) + len(red_results)
-    correct_detections = (sum(1 for r in blue_results if r["blue_detected"] > 0) +
-                          sum(1 for r in red_results if r["red_detected"] > 0))
     if total_images > 0:
+        correct_detections = (sum(1 for r in blue_results if r["blue_detected"] > 0) +
+                              sum(1 for r in red_results if r["red_detected"] > 0))
         overall_accuracy = correct_detections / total_images * 100
-        print(f"\n🎯 OVERALL ACCURACY: {correct_detections}/{total_images} ({overall_accuracy:.1f}%)")
+        
+        # Overall accuracy indicator
+        if overall_accuracy >= 95:
+            indicator = "🟢 EXCELLENT"
+        elif overall_accuracy >= 80:
+            indicator = "🟡 GOOD"
+        elif overall_accuracy >= 60:
+            indicator = "🟠 FAIR"
+        else:
+            indicator = "🔴 POOR"
+        
+        print(f"  Overall Detection Rate: {correct_detections}/{total_images} ({overall_accuracy:.1f}%) {indicator}")
+        
+        # Additional metrics
+        total_shapes = sum(r["total_shapes"] for r in blue_results + red_results)
+        total_correct = (sum(1 for r in blue_results if r["blue_detected"] > 0) + 
+                        sum(1 for r in red_results if r["red_detected"] > 0))
+        
+        print(f"  Total Images: {total_images}")
+        print(f"  Total Shapes Detected: {total_shapes}")
+        print(f"  Average per Image: {total_shapes/total_images:.2f}")
+
+def generate_csv_report(results, output_file: str = "detection_report.csv"):
+    """
+    Generate a detailed CSV report of all detection results
+    for further analysis in spreadsheet tools
+    """
+    import csv
+    
+    try:
+        with open(output_file, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=['folder', 'filename', 'blue_detected', 'red_detected', 'total_shapes'])
+            writer.writeheader()
+            
+            for key, records in results.items():
+                for record in records:
+                    writer.writerow({
+                        'folder': key,
+                        'filename': record['filename'],
+                        'blue_detected': record['blue_detected'],
+                        'red_detected': record['red_detected'],
+                        'total_shapes': record['total_shapes']
+                    })
+        
+        print(f"\n📄 Detailed CSV report saved to: {output_file}")
+    except Exception as e:
+        print(f"⚠️  Failed to save CSV report: {e}")
+
+def generate_json_report(results, output_file: str = "detection_report.json"):
+    """
+    Generate a detailed JSON report with statistics
+    for programmatic processing and visualization
+    """
+    try:
+        # Calculate summary statistics
+        blue_results = results.get("blue_objects", [])
+        red_results = results.get("red_objects", [])
+        
+        total_images = len(blue_results) + len(red_results)
+        blue_detected = sum(1 for r in blue_results if r["blue_detected"] > 0)
+        red_detected = sum(1 for r in red_results if r["red_detected"] > 0)
+        
+        report = {
+            "timestamp": str(__import__('datetime').datetime.now()),
+            "summary": {
+                "total_images": total_images,
+                "blue_detection_rate": (blue_detected / len(blue_results) * 100) if blue_results else 0,
+                "red_detection_rate": (red_detected / len(red_results) * 100) if red_results else 0,
+                "overall_accuracy": ((blue_detected + red_detected) / total_images * 100) if total_images > 0 else 0
+            },
+            "blue_objects": {
+                "total": len(blue_results),
+                "detected": blue_detected,
+                "missed": len(blue_results) - blue_detected,
+                "results": blue_results
+            },
+            "red_objects": {
+                "total": len(red_results),
+                "detected": red_detected,
+                "missed": len(red_results) - red_detected,
+                "results": red_results
+            }
+        }
+        
+        with open(output_file, 'w') as f:
+            json.dump(report, f, indent=2)
+        
+        print(f"\n📊 Detailed JSON report saved to: {output_file}")
+    except Exception as e:
+        print(f"⚠️  Failed to save JSON report: {e}")
 
 def _parse_args():
-    p = argparse.ArgumentParser(description="Process dataset images with improved shape detection")
-    p.add_argument("--dataset", default="dataset", help="Path to dataset folder")
+    p = argparse.ArgumentParser(
+        description="Process dataset images with improved shape detection",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python dataset_processor.py --dataset dataset --output processed
+  python dataset_processor.py --dataset dataset --show --sample 20
+  python dataset_processor.py --dataset dataset --output processed --csv report.csv --json report.json --log debug
+        """
+    )
+    p.add_argument("--dataset", default="dataset", help="Path to dataset folder (default: dataset)")
     p.add_argument("--output", help="Path to save processed images")
-    p.add_argument("--show", action="store_true", help="Show processed images (only if display available)")
+    p.add_argument("--show", action="store_true", help="Show processed images (requires display)")
     p.add_argument("--sample", type=int, help="Process only first N images from each folder")
+    p.add_argument("--csv", help="Save detection results to CSV file")
+    p.add_argument("--json", help="Save detection results to JSON file with statistics")
     p.add_argument("--no-shape-module", action="store_true", help="Do not use shape_detector module even if present")
-    p.add_argument("--log", default="info", help="Log level (debug, info, warning, error)")
+    p.add_argument("--log", default="info", choices=["debug", "info", "warning", "error"], 
+                   help="Log level (default: info)")
     return p.parse_args()
 
 def main():
     args = _parse_args()
-    logging.basicConfig(level=getattr(logging, args.log.upper(), logging.INFO), format="%(levelname)s: %(message)s")
+    
+    # Setup logging
+    log_level = getattr(logging, args.log.upper(), logging.INFO)
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s - %(name)s - %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
     logger = logging.getLogger("dataset_processor")
 
     if args.show and is_headless():
         logger.warning("Display not detected: --show will be ignored in headless environment")
         args.show = False
 
-    logger.info("Starting dataset processing...")
-    results = process_dataset(args.dataset, args.output, args.show, args.sample, use_shape_module=not args.no_shape_module)
+    logger.info("=" * 60)
+    logger.info("DATASET PROCESSOR - Starting")
+    logger.info("=" * 60)
+    logger.info("Configuration:")
+    logger.info("  Dataset path: %s", args.dataset)
+    logger.info("  Output path: %s", args.output if args.output else "None (display only)")
+    logger.info("  Show images: %s", args.show)
+    logger.info("  Sample size: %s", args.sample if args.sample else "All images")
+    logger.info("  Use shape_module: %s", not args.no_shape_module and HAVE_SHAPE_MODULE)
+    if args.csv:
+        logger.info("  CSV report: %s", args.csv)
+    if args.json:
+        logger.info("  JSON report: %s", args.json)
+    logger.info("=" * 60)
+
+    # Check if dataset path exists
+    if not Path(args.dataset).exists():
+        logger.error("Dataset path does not exist: %s", args.dataset)
+        return
+
+    results = process_dataset(
+        args.dataset,
+        args.output,
+        args.show,
+        args.sample,
+        use_shape_module=not args.no_shape_module
+    )
+    
+    # Print summary report
     print_summary(results)
+    
+    # Save CSV report if requested
+    if args.csv:
+        generate_csv_report(results, args.csv)
+    
+    # Save JSON report if requested
+    if args.json:
+        generate_json_report(results, args.json)
+    
+    # Log completion
     if args.output:
-        logger.info("Processed images saved to: %s", args.output)
+        logger.info("✓ Processed images saved to: %s", args.output)
+    
+    logger.info("=" * 60)
+    logger.info("DATASET PROCESSOR - Complete")
+    logger.info("=" * 60)
 
 if __name__ == "__main__":
     main()
