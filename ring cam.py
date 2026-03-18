@@ -1,3 +1,4 @@
+#ignore this file
 import cv2
 import numpy as np
 
@@ -21,6 +22,11 @@ def detect_rings(frame):
     # Create masks for red and blue using common utilities
     red_mask, blue_mask = create_color_masks(hsv_frame)
     
+    # IMPROVED: More aggressive erosion to separate touching rings
+    erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    red_mask = cv2.erode(red_mask, erode_kernel, iterations=2)
+    blue_mask = cv2.erode(blue_mask, erode_kernel, iterations=2)
+    
     # Apply morphological operations with different kernel sizes for better consistency
     kernel_small = np.ones((3, 3), np.uint8)
     kernel_large = np.ones((7, 7), np.uint8)
@@ -42,6 +48,10 @@ def detect_rings(frame):
     # Track detected rings for each color
     detected_rings = []
     
+    # IMPROVED: Use dynamic minimum area like block detection for consistency
+    h, w = frame.shape[:2]
+    min_area_px = max(2000, int((w * h) * 0.001))
+    
     # Process both red and blue rings
     for color, mask, bbox_color in [("red", red_mask, (0, 0, 255)), 
                                    ("blue", blue_mask, (255, 0, 0))]:
@@ -54,7 +64,7 @@ def detect_rings(frame):
         # Process each contour
         for contour in contours:
             area = cv2.contourArea(contour)
-            if area < 3000:  # Reduced minimum area for better detection
+            if area < min_area_px:  # Use dynamic minimum area
                 continue
                 
             # Calculate shape metrics
@@ -100,6 +110,8 @@ def main():
         return
     
     print("Press 'q' to exit")
+    print("Press 's' to save screenshot")
+    print("Press 'c' to clear detection history")
     
     # Parameters for tracking stability
     prev_rings = []
@@ -151,8 +163,17 @@ def main():
         # Show result
         cv2.imshow("Ring Detection", result)
         
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
             break
+        elif key == ord('s'):
+            filename = f"ring_detection_{frame_count}.png"
+            cv2.imwrite(filename, result)
+            print(f"Saved: {filename}")
+        elif key == ord('c'):
+            ring_history = []
+            prev_rings = []
+            print("Detection history cleared")
     
     cap.release()
     cv2.destroyAllWindows()
