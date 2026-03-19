@@ -104,11 +104,11 @@ def get_color_ranges():
         - 'blue': Tuple of (lower_bound, upper_bound) for blue range
     """
     return {
-        # Red detection - more selective to avoid dark/muddy colors
-        'red1': (np.array([0, 85, 60]), np.array([6, 255, 255])),      # Pure reds, higher sat/val thresholds
-        'red2': (np.array([165, 85, 60]), np.array([180, 255, 255])),  # Deep reds, higher sat/val thresholds
-        # Blue detection - avoid grayish blues
-        'blue': (np.array([100, 85, 70]), np.array([130, 255, 255]))   # Pure blues only
+        # Red detection - very selective to avoid skin tones and background
+        'red1': (np.array([0, 120, 100]), np.array([5, 255, 255])),      # Pure bright reds only, high saturation & value
+        'red2': (np.array([170, 120, 100]), np.array([180, 255, 255])),  # Deep bright reds, high saturation & value
+        # Blue detection - VERY selective to avoid light/pale blues (post-its, etc)
+        'blue': (np.array([100, 150, 120]), np.array([125, 255, 255]))   # Only deep saturated bright blues
     }
 
 

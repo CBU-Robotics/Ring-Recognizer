@@ -48,12 +48,6 @@ def detect_balls(frame, mode=None):
     blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel, iterations=1)
     blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
     
-    # Show debug masks
-    debug_view = np.zeros_like(frame)
-    debug_view[:, :, 0] = blue_mask  # Blue channel
-    debug_view[:, :, 2] = red_mask   # Red channel
-    cv2.imshow("Color Masks", debug_view)
-    
     # Track detected objects
     detected_balls = []
     
@@ -76,7 +70,7 @@ def detect_balls(frame, mode=None):
         debug_missed = []
         for contour in contours:
             area = cv2.contourArea(contour)
-            x, y, w_rect, h_rect = cv2.boundingRect(contour)
+            x_rect, y_rect, w_rect, h_rect = cv2.boundingRect(contour)
             aspect_ratio = w_rect / h_rect if h_rect > 0 else 0
             perimeter = cv2.arcLength(contour, True)
             circularity = 4 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0
@@ -85,8 +79,8 @@ def detect_balls(frame, mode=None):
             reason = None
             if area < min_area_px:
                 reason = f"area {area:.1f} < min_area_px {min_area_px}"
-            elif (x < border_margin or y < border_margin or x + w_rect > w - border_margin or y + h_rect > h - border_margin):
-                reason = f"edge: x={x}, y={y}, w={w_rect}, h={h_rect}, border_margin={border_margin:.1f}"
+            elif (x_rect < border_margin or y_rect < border_margin or x_rect + w_rect > w - border_margin or y_rect + h_rect > h - border_margin):
+                reason = f"edge: x={x_rect}, y={y_rect}, w={w_rect}, h={h_rect}, border_margin={border_margin:.1f}"
             elif area < (w*h)*0.25 and (aspect_ratio > 3 or aspect_ratio < 0.33):
                 reason = f"aspect_ratio {aspect_ratio:.2f} out of range for area {area:.1f}"
             if reason:
@@ -95,8 +89,8 @@ def detect_balls(frame, mode=None):
                     "area": area,
                     "aspect_ratio": aspect_ratio,
                     "circularity": circularity,
-                    "x": x,
-                    "y": y,
+                    "x": x_rect,
+                    "y": y_rect,
                     "w": w_rect,
                     "h": h_rect,
                     "reason": reason
@@ -104,18 +98,11 @@ def detect_balls(frame, mode=None):
                 continue
             
             # Calculate distance from center (prefer center objects)
-            contour_center_x = x + w_rect // 2
-            contour_center_y = y + h_rect // 2
+            contour_center_x = x_rect + w_rect // 2
+            contour_center_y = y_rect + h_rect // 2
             dist_from_center = np.sqrt((contour_center_x - center_x)**2 + (contour_center_y - center_y)**2)
             max_dist = np.sqrt(center_x**2 + center_y**2)
             center_score = 1.0 - (dist_from_center / max_dist)
-            
-            # Calculate circularity/compactness
-            perimeter = cv2.arcLength(contour, True)
-            if perimeter > 0:
-                circularity = 4 * np.pi * area / (perimeter * perimeter)
-            else:
-                circularity = 0
             
             valid_contours.append((contour, area, center_score, circularity))
         
@@ -126,13 +113,13 @@ def detect_balls(frame, mode=None):
         for contour, area, center_score, circularity in valid_contours:
             (center_x_obj, center_y_obj), radius = cv2.minEnclosingCircle(contour)
             center_x_obj, center_y_obj = int(center_x_obj), int(center_y_obj)
-            radius = int(radius * 0.85)  # Shrink bounding circle
+            radius = max(1, int(radius * 0.85))  # Shrink bounding circle, ensure minimum radius
             cv2.circle(result, (center_x_obj, center_y_obj), radius, bbox_color, 3)
             cv2.putText(result, f"{color} object", (center_x_obj - radius, center_y_obj - radius - 10), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, bbox_color, 2)
-            x, y = center_x_obj - radius, center_y_obj - radius
+            bbox_x, bbox_y = center_x_obj - radius, center_y_obj - radius
             w_box, h_box = radius * 2, radius * 2
-            detected_balls.append((color, (center_x_obj, center_y_obj), radius, (x, y, w_box, h_box)))
+            detected_balls.append((color, (center_x_obj, center_y_obj), radius, (bbox_x, bbox_y, w_box, h_box)))
         
         if debug_missed:
             print(f"[DEBUG] Missed {len(debug_missed)} {color} contours:")
