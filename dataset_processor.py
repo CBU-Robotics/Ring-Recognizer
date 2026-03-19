@@ -20,6 +20,7 @@ import sys
 import os
 from typing import List, Tuple
 import json
+import random
 
 import cv2
 import numpy as np
@@ -254,16 +255,44 @@ def draw_detections_on_image(image, detections):
 # -------------------------
 # Dataset processing
 # -------------------------
+def clear_output_directory(output_path: str):
+    """
+    Clear all files from the output directory before processing
+    """
+    if not output_path:
+        return
+    
+    output_dir = Path(output_path)
+    if output_dir.exists():
+        try:
+            for file in output_dir.glob("*"):
+                if file.is_file():
+                    file.unlink()
+            logger = logging.getLogger("dataset_processor")
+            logger.info("Cleared output directory: %s", output_path)
+        except Exception as e:
+            logger = logging.getLogger("dataset_processor")
+            logger.warning("Failed to clear output directory: %s", str(e))
+
 def process_dataset(dataset_path: str,
                     output_path: str = None,
                     show_images: bool = False,
                     sample_size: int = None,
+                    random_sample: bool = False,
                     use_shape_module: bool = True):
     """
     Process images in dataset folder structure:
       dataset/
         Blue objects/
         Red objects/
+
+    Args:
+        dataset_path: Path to dataset folder
+        output_path: Path to save processed images
+        show_images: Whether to display images while processing
+        sample_size: Number of images to process from each folder
+        random_sample: If True, randomly select sample_size images. If False, take first N.
+        use_shape_module: Whether to use shape_detector if available
 
     Returns: results dict with detailed statistics
     """
@@ -272,6 +301,8 @@ def process_dataset(dataset_path: str,
     if output_path:
         outp = Path(output_path)
         outp.mkdir(parents=True, exist_ok=True)
+        # Clear old processed images
+        clear_output_directory(output_path)
 
     results = {"blue_objects": [], "red_objects": []}
     stats = {"total_processed": 0, "failed": 0, "errors": []}
@@ -292,7 +323,15 @@ def process_dataset(dataset_path: str,
         image_files = sorted(set(image_files))
 
         if sample_size:
-            image_files = image_files[:sample_size]
+            if random_sample:
+                # Randomly select sample_size images
+                if len(image_files) > sample_size:
+                    image_files = random.sample(image_files, sample_size)
+                logger.info("Randomly selected %d/%d images from %s", len(image_files), len(set(image_files)), folder)
+            else:
+                # Take first sample_size images
+                image_files = image_files[:sample_size]
+                logger.info("Selected first %d images from %s", len(image_files), folder)
 
         if not image_files:
             logger.warning("No images found in %s", folder)
@@ -601,14 +640,16 @@ def _parse_args():
         epilog="""
 Examples:
   python dataset_processor.py --dataset dataset --output processed
-  python dataset_processor.py --dataset dataset --show --sample 20
+  python dataset_processor.py --dataset dataset --sample 20
+  python dataset_processor.py --dataset dataset --sample 20 --random
   python dataset_processor.py --dataset dataset --output processed --csv report.csv --json report.json --log debug
         """
     )
     p.add_argument("--dataset", default="dataset", help="Path to dataset folder (default: dataset)")
     p.add_argument("--output", help="Path to save processed images")
     p.add_argument("--show", action="store_true", help="Show processed images (requires display)")
-    p.add_argument("--sample", type=int, help="Process only first N images from each folder")
+    p.add_argument("--sample", type=int, help="Process only N images from each folder")
+    p.add_argument("--random", action="store_true", help="Randomly select sample images (instead of first N)")
     p.add_argument("--csv", help="Save detection results to CSV file")
     p.add_argument("--json", help="Save detection results to JSON file with statistics")
     p.add_argument("--no-shape-module", action="store_true", help="Do not use shape_detector module even if present")
@@ -639,7 +680,10 @@ def main():
     logger.info("  Dataset path: %s", args.dataset)
     logger.info("  Output path: %s", args.output if args.output else "None (display only)")
     logger.info("  Show images: %s", args.show)
-    logger.info("  Sample size: %s", args.sample if args.sample else "All images")
+    if args.sample:
+        logger.info("  Sample size: %d %s", args.sample, "(random)" if args.random else "(sequential)")
+    else:
+        logger.info("  Sample size: All images")
     logger.info("  Use shape_module: %s", not args.no_shape_module and HAVE_SHAPE_MODULE)
     if args.csv:
         logger.info("  CSV report: %s", args.csv)
@@ -657,6 +701,7 @@ def main():
         args.output,
         args.show,
         args.sample,
+        random_sample=args.random,
         use_shape_module=not args.no_shape_module
     )
     

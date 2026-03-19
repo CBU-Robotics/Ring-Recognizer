@@ -45,6 +45,17 @@ Thumbs.db
 *.avi
 *.mov
 
+# Test and report files (CSV, JSON)
+test_*.csv
+test_*.json
+*_test.csv
+*_test.json
+results*.csv
+results*.json
+final_test/
+final_test.csv
+final_test.json
+
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
 
